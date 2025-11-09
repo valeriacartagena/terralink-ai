@@ -122,7 +122,7 @@ def predict():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("\n🌍 TerraLink Backend Starting...")
+    print("\n TerraLink Backend Starting...")
     print("🤖 AI Model: Google Gemini Pro")
     print("📡 Agents:")
     print("   - Agent 1: Query Parser (Gemini)")
