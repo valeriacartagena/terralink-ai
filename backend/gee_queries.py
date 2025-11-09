@@ -30,24 +30,26 @@ class GEEQueryAgent:
     
     def get_region_geometry(self, region_name):
         """Convert region name to GEE geometry"""
-        # Handle None or invalid region
+        # Handle None or invalid region - don't default to Texas, raise error instead
         if not region_name:
-            region_name = 'texas'
+            raise ValueError("Region name is required but was not provided")
         
         region_key = region_name.lower().strip()
         
-        if self.gee_available:
-            return self.region_bounds.get(region_key, self.region_bounds['texas'])
-        else:
-            return self.region_bounds.get(region_key, self.region_bounds['texas'])
+        if region_key not in self.region_bounds:
+            available = list(self.region_bounds.keys())
+            print(f"   ⚠️ Region '{region_name}' not found in available regions")
+            print(f"   Available regions: {available}")
+            raise ValueError(f"Region '{region_name}' not supported. Available regions: {', '.join(available)}")
+        
+        return self.region_bounds.get(region_key)
     
     def query_solar_sites(self, region_name, datasets, num_samples=100):
         """Query GEE for solar sites with scoring algorithm"""
         
-        # Handle None region - default to Texas
+        # Handle None region - raise error instead of defaulting
         if not region_name:
-            print("   ⚠️  No region specified, defaulting to Texas")
-            region_name = 'Texas'
+            raise ValueError("Region name is required but was not provided. Please specify a region in your query.")
         
         print(f"\n🛰️  Agent 3: Querying for {num_samples} sites in {region_name}...")
         
@@ -131,7 +133,7 @@ class GEEQueryAgent:
         
         # Handle None or invalid region
         if not region_name:
-            region_name = 'Texas'
+            raise ValueError("Region name is required but was not provided. Please specify a region in your query.")
         
         # Regional centers and characteristics
         region_data = {
@@ -145,8 +147,10 @@ class GEEQueryAgent:
         }
         
         region_key = region_name.lower().strip()
-        region_info = region_data.get(region_key, region_data['texas'])
+        if region_key not in region_data:
+            raise ValueError(f"Region '{region_name}' is not supported in mock mode. Supported regions: {', '.join(region_data.keys())}")
         
+        region_info = region_data[region_key]
         center = region_info['center']
         base_irradiance = region_info['irr_base']
         avg_slope = region_info['slope_avg']

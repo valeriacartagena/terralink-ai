@@ -25,20 +25,35 @@ def chat():
         data = request.json
         user_message = data.get('message', '')
         
-        result = agent_system.process_full_query(user_message)
+        if not user_message:
+            return jsonify({
+                'error': 'Message is required',
+                'response': 'Please provide a message in your query.'
+            }), 400
         
-        response_text = f"✅ I understand you're looking for {result['parsed_query']['energy_type']} sites in {result['parsed_query']['region']}. Analyzing with Gemini AI..."
+        result = agent_system.process_full_query(user_message)
+        parsed = result['parsed_query']
+        
+        # Provide more helpful response based on what was parsed
+        if not parsed.get('region'):
+            response_text = f"🔍 I understand you're looking for {parsed['energy_type']} sites, but I couldn't determine the region from your query. Could you please specify a location? For example: 'solar farm in California' or 'wind site in Nevada'."
+        else:
+            response_text = f"✅ I understand you're looking for {parsed['energy_type']} sites in {parsed['region']}. Analyzing with Gemini AI..."
         
         return jsonify({
             'response': response_text,
-            'parsed': result['parsed_query'],
+            'parsed': parsed,
             'datasets': result['datasets'],
-            'ai_model': 'gemini-pro'
+            'ai_model': 'gemini-pro',
+            'needs_clarification': not parsed.get('region')
         })
     
     except Exception as e:
         print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': str(e),
+            'response': 'Sorry, I encountered an error processing your request. Please try again or rephrase your query.'
+        }), 500
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
@@ -51,12 +66,29 @@ def analyze():
         parsed = result['parsed_query']
         datasets = result['datasets']
         
+        # Check if region was parsed
+        if not parsed.get('region'):
+            return jsonify({
+                'success': False,
+                'error': 'Could not determine the region from your query. Please specify a region (e.g., "solar farm in California" or "wind site in Nevada")',
+                'parsed_query': parsed,
+                'suggestions': 'Try including a state or region name in your query, such as: "Find solar sites in Texas" or "Wind energy in California"'
+            }), 400
+        
         # Agent 3: GEE Data Fetching
-        sites = gee_agent.query_solar_sites(
-            region_name=parsed['region'],
-            datasets=datasets,
-            num_samples=100
-        )
+        try:
+            sites = gee_agent.query_solar_sites(
+                region_name=parsed['region'],
+                datasets=datasets,
+                num_samples=100
+            )
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'parsed_query': parsed,
+                'suggestions': f'The region "{parsed["region"]}" might not be supported. Try: Texas, California, Nevada, Arizona, New Mexico, Colorado, or Utah'
+            }), 400
         
         # Agent 4: Explanation
         explanation = agent_system.agent_4_explain_results(

@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import os
 import json
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,17 +25,107 @@ class MultiAgentSystem:
             'max_output_tokens': 1024,
         }
         
+    def _extract_json_from_text(self, text):
+        """Extract JSON from text that might contain markdown or extra text"""
+        
+        # First, try removing markdown code blocks
+        text_clean = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
+        text_clean = re.sub(r'```\s*', '', text_clean)
+        text_clean = text_clean.strip()
+        
+        # Try parsing the cleaned text directly
+        try:
+            return json.loads(text_clean)
+        except:
+            pass
+        
+        # Try to find JSON object boundaries more carefully
+        # Find the first { and match it with the last }
+        start = text_clean.find('{')
+        if start >= 0:
+            # Find matching closing brace by counting braces
+            brace_count = 0
+            end = start
+            for i in range(start, len(text_clean)):
+                if text_clean[i] == '{':
+                    brace_count += 1
+                elif text_clean[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = i + 1
+                        break
+            
+            if end > start:
+                try:
+                    json_str = text_clean[start:end]
+                    return json.loads(json_str)
+                except:
+                    pass
+        
+        # Last resort: try to find any JSON-like structure
+        # Look for patterns like {"key": "value"}
+        json_pattern = r'\{[^{}]*"[^"]*"[^{}]*\}'
+        matches = re.findall(json_pattern, text_clean, re.DOTALL)
+        for match in matches:
+            try:
+                return json.loads(match)
+            except:
+                continue
+        
+        return None
+    
+    def _extract_info_from_text(self, text, user_input):
+        """Fallback: Try to extract energy_type and region from text using simple patterns"""
+        
+        result = {
+            "energy_type": "solar",
+            "region": None,
+            "size_acres": None,
+            "criteria": {"primary": ["irradiance", "slope"], "secondary": []}
+        }
+        
+        # Try to find energy type
+        energy_patterns = {
+            'solar': r'solar|pv|photovoltaic',
+            'wind': r'wind|turbine',
+            'hydro': r'hydro|hydropower|water',
+            'geothermal': r'geothermal|geo-thermal'
+        }
+        
+        text_lower = text.lower() + " " + user_input.lower()
+        for energy_type, pattern in energy_patterns.items():
+            if re.search(pattern, text_lower):
+                result['energy_type'] = energy_type
+                break
+        
+        # Try to find region (US states)
+        states = ['texas', 'california', 'nevada', 'arizona', 'new mexico', 'colorado', 
+                 'utah', 'florida', 'north carolina', 'new york', 'massachusetts',
+                 'oregon', 'washington', 'montana', 'wyoming', 'idaho']
+        
+        for state in states:
+            if state in text_lower:
+                result['region'] = state.title()
+                break
+        
+        # Try to find size
+        size_match = re.search(r'(\d+)\s*acre', text_lower)
+        if size_match:
+            result['size_acres'] = int(size_match.group(1))
+        
+        return result
+
     def agent_1_parse_query(self, user_input):
         """Agent 1: Query Parser - Understands user intent using Gemini"""
         
-        prompt = f"""You are a renewable energy site analyst. Parse this user query:
+        prompt = f"""You are a renewable energy site analyst. Parse this user query and extract key information:
 
-"{user_input}"
+User Query: "{user_input}"
 
-Extract and return ONLY a JSON object with NO other text, no markdown, no code blocks:
+Extract and return ONLY valid JSON (no markdown, no code blocks, no explanations):
 {{
     "energy_type": "solar|wind|hydro|geothermal",
-    "region": "state or region name",
+    "region": "state or region name (e.g., Texas, California, Nevada)",
     "size_acres": number or null,
     "criteria": {{
         "primary": ["list of important factors"],
@@ -42,52 +133,91 @@ Extract and return ONLY a JSON object with NO other text, no markdown, no code b
     }}
 }}
 
-CRITICAL: Output ONLY the JSON object. No explanations, no markdown, no ```json blocks.
+IMPORTANT RULES:
+1. Output ONLY the JSON object, nothing else
+2. If energy type is not specified, infer from context (default to "solar" only if truly ambiguous)
+3. If region is not specified, set to null (do NOT default to Texas)
+4. Extract the exact region name mentioned by the user
+5. Use proper JSON format with double quotes
 
-Example: "30 acre solar farm in Texas" → {{"energy_type": "solar", "region": "Texas", "size_acres": 30, "criteria": {{"primary": ["irradiance", "slope"], "secondary": ["land_cover"]}}}}"""
+Examples:
+- "solar farm in California" → {{"energy_type": "solar", "region": "California", "size_acres": null, "criteria": {{"primary": ["irradiance", "slope"], "secondary": []}}}}
+- "wind energy site in Nevada" → {{"energy_type": "wind", "region": "Nevada", "size_acres": null, "criteria": {{"primary": ["wind_speed", "elevation"], "secondary": []}}}}
+- "30 acre solar farm in Arizona" → {{"energy_type": "solar", "region": "Arizona", "size_acres": 30, "criteria": {{"primary": ["irradiance", "slope"], "secondary": ["land_cover"]}}}}"""
 
+        text = None
         try:
+            print(f"   📤 Sending to Gemini: '{user_input[:50]}...'")
             response = self.model.generate_content(
                 prompt,
                 generation_config=self.generation_config
             )
             
             text = response.text.strip()
+            print(f"   📥 Raw Gemini response: {text[:200]}...")
             
-            # Remove markdown code blocks if present
-            text = text.replace('```json', '').replace('```', '').strip()
+            # Try multiple methods to extract JSON
+            parsed = self._extract_json_from_text(text)
             
-            parsed = json.loads(text)
-            
-            # Validate and set defaults
-            if 'energy_type' not in parsed:
-                parsed['energy_type'] = 'solar'
-            if 'region' not in parsed:
-                parsed['region'] = 'Texas'
-            if 'criteria' not in parsed:
-                parsed['criteria'] = {"primary": ["irradiance", "slope"], "secondary": []}
+            if parsed:
+                print(f"   ✓ Successfully parsed JSON from Gemini")
                 
-            print(f"   ✓ Parsed: {parsed['energy_type']} in {parsed['region']}")
-            return parsed
+                # Validate required fields but don't default to Texas if region is missing
+                if 'energy_type' not in parsed or not parsed['energy_type']:
+                    parsed['energy_type'] = 'solar'
+                    print(f"   ⚠️ Missing energy_type, defaulting to solar")
+                
+                if 'region' not in parsed or not parsed['region']:
+                    # Try to extract from user input as fallback
+                    fallback_info = self._extract_info_from_text(user_input, user_input)
+                    parsed['region'] = fallback_info['region']
+                    if not parsed['region']:
+                        print(f"   ⚠️ No region found in query, setting to null")
+                        parsed['region'] = None
+                    else:
+                        print(f"   ✓ Extracted region from user input: {parsed['region']}")
+                
+                if 'criteria' not in parsed:
+                    parsed['criteria'] = {"primary": ["irradiance", "slope"], "secondary": []}
+                
+                print(f"   ✓ Final parsed: {parsed['energy_type']} in {parsed['region']}")
+                return parsed
+            else:
+                print(f"   ⚠️ Could not parse JSON, trying fallback extraction")
+                # Fallback: try to extract info from the response text and user input
+                parsed = self._extract_info_from_text(text, user_input)
+                
+                if not parsed['region']:
+                    print(f"   ⚠️ Still no region found, checking user input directly")
+                    # Last resort: check user input directly
+                    user_lower = user_input.lower()
+                    states = ['texas', 'california', 'nevada', 'arizona', 'new mexico', 
+                             'colorado', 'utah', 'florida', 'north carolina', 'new york']
+                    for state in states:
+                        if state in user_lower:
+                            parsed['region'] = state.title()
+                            print(f"   ✓ Found region in user input: {parsed['region']}")
+                            break
+                
+                print(f"   ✓ Fallback parsed: {parsed['energy_type']} in {parsed['region']}")
+                return parsed
             
-        except json.JSONDecodeError as e:
-            print(f"   ⚠️ JSON parse error: {e}")
-            print(f"   Raw response: {text}")
-            # Return safe defaults
-            return {
-                "energy_type": "solar",
-                "region": "Texas",
-                "size_acres": None,
-                "criteria": {"primary": ["irradiance", "slope"], "secondary": []}
-            }
         except Exception as e:
             print(f"   ❌ Agent 1 error: {e}")
-            return {
-                "energy_type": "solar",
-                "region": "Texas",
-                "size_acres": None,
-                "criteria": {"primary": ["irradiance", "slope"], "secondary": []}
-            }
+            print(f"   Error type: {type(e).__name__}")
+            if text:
+                print(f"   Response text: {text[:500]}")
+            
+            # Last resort: try to extract from user input directly
+            print(f"   🔍 Attempting direct extraction from user input")
+            parsed = self._extract_info_from_text(user_input, user_input)
+            
+            if not parsed['region']:
+                print(f"   ⚠️ WARNING: No region could be extracted from: '{user_input}'")
+                print(f"   Setting region to null (will need user clarification)")
+                parsed['region'] = None
+            
+            return parsed
     
     def agent_2_discover_datasets(self, energy_type, criteria):
         """Agent 2: Dataset Discovery - Finds relevant GEE datasets"""

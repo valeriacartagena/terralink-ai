@@ -63,11 +63,24 @@ const RenewableSiteApp = () => {
         body: JSON.stringify({ message: userQuery })
       });
       
+      if (!chatResponse.ok) {
+        const errorData = await chatResponse.json();
+        throw new Error(errorData.error || errorData.response || 'Chat request failed');
+      }
+      
       const chatData = await chatResponse.json();
       
       setMessages(prev => [...prev, 
         { role: 'agent', text: chatData.response }
       ]);
+      
+      // If region was not found, don't proceed to analysis
+      if (chatData.needs_clarification) {
+        setMessages(prev => [...prev, 
+          { role: 'agent', text: '💡 Tip: Try being more specific with your location, like "solar farm in California" or "wind energy in Nevada"' }
+        ]);
+        return;
+      }
       
       if (chatData.datasets) {
         setDatasets(chatData.datasets.map(d => ({
@@ -87,6 +100,19 @@ const RenewableSiteApp = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: userQuery })
       });
+      
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json();
+        setMessages(prev => [...prev, 
+          { role: 'agent', text: `❌ ${errorData.error || 'Analysis failed'}` }
+        ]);
+        if (errorData.suggestions) {
+          setMessages(prev => [...prev, 
+            { role: 'agent', text: `💡 ${errorData.suggestions}` }
+          ]);
+        }
+        return;
+      }
       
       const analyzeData = await analyzeResponse.json();
       
@@ -108,6 +134,10 @@ const RenewableSiteApp = () => {
           setPredictions(analyzeData.predictions);
           setShowPredictions(true);
         }
+      } else {
+        setMessages(prev => [...prev, 
+          { role: 'agent', text: `❌ ${analyzeData.error || 'Analysis was not successful'}` }
+        ]);
       }
       
     } catch (error) {
@@ -212,13 +242,14 @@ const RenewableSiteApp = () => {
               {['Solar', 'Wind', 'Hydro', 'Geothermal'].map((type) => (
                 <button 
                   key={type}
-                  onClick={() => setInput(`Find a ${type.split(' ')[1].toLowerCase()} farm site in Texas`)}
+                  onClick={() => setInput(`Find ${type.toLowerCase()} sites`)}
                   className="bg-slate-700 hover:bg-green-600 rounded-lg p-2 text-xs transition"
                 >
                   {type}
                 </button>
               ))}
             </div>
+            <p className="text-xs text-slate-500 mt-2">💡 Tip: Include a location like "in California" or "in Texas"</p>
           </div>
         </aside>
 
