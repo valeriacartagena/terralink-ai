@@ -2,7 +2,7 @@
 
 **TerraLink** is an AI-powered renewable energy site analysis platform that helps identify optimal locations for solar, wind, hydro, and geothermal energy projects. Built with Google Gemini AI and Google Earth Engine, it provides intelligent site analysis, scoring, and predictive insights.
 
-![Powered by Google Gemini & GEE](https://img.shields.io/badge/Powered%20by-Google%20Gemini%20%26%20GEE-blue)
+![Powered by Google Gemini & Google Earth Engine](https://img.shields.io/badge/Powered%20by-Google%20Gemini%20%26%20GEE-blue)
 
 ##  Features
 
